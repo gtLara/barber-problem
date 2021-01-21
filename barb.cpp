@@ -16,8 +16,8 @@ typedef unsigned *CAST_LPDWORD;
 #define HLRED   FOREGROUND_RED   | FOREGROUND_INTENSITY
 
 #define	ESC				0x1B			// Tecla para encerrar o programa
-#define N_CLIENTS		20			// Número de clientes
-#define N_BARBS		    4			// Número de barbeiros
+#define N_CLIENTS		10			// Número de clientes
+#define N_BARBS		    6			// Número de barbeiros
 #define N_CASHIERS		1			// Número de caixas
 #define N_CHAIRS        7           // Número de cadeiras (4 de espera e 3 de barbear)
 
@@ -31,21 +31,20 @@ void TemABarbaFeita(int);			// Função que simula o ato de ter a barba feita
 int nTecla;							// Variável que armazena a tecla digitada para sair
 int client_counter = 0;
 int id_cliente;                     // Identificador do cliente
+int payers = 0; // numero de clientes a pagar
 
 HANDLE look;  
 HANDLE waiting_room;  
 HANDLE chair;
 HANDLE wake;
-HANDLE work;
 HANDLE leave_chair;
 HANDLE end;
-HANDLE pay;
 HANDLE end_pay;
 
 // THREAD PRIMÁRIA
 int main(){
 
-	HANDLE hThreads[N_CLIENTS+N_BARBS];       // N clientes mais o barbeiro
+	HANDLE hThreads[N_CLIENTS + N_BARBS];       // N clientes mais o barbeiro
 	DWORD dwIdBarbeiro, dwIdCliente;
 	DWORD dwExitCode = 0;
 	DWORD dwRet;
@@ -59,11 +58,9 @@ int main(){
 	// Cria objetos de sincronização
 
     look = CreateMutex(NULL, FALSE, NULL);
-    pay = CreateSemaphore(NULL, 0, 1, NULL);
     /* waiting_room = CreateSemaphore(NULL, waiting_room_capacity, waiting_room_capacity, NULL); */
     chair = CreateSemaphore(NULL, N_BARBS, N_BARBS, NULL);
     wake = CreateSemaphore(NULL, 0, N_BARBS, NULL); // sera que maximo deve ser n_barb mesmo?
-    work = CreateSemaphore(NULL, N_BARBS, N_BARBS, NULL);
     leave_chair = CreateSemaphore(NULL, 0, N_BARBS, NULL);
     end = CreateSemaphore(NULL, 0, N_BARBS, NULL);
     end_pay = CreateSemaphore(NULL, 0, N_BARBS, NULL);
@@ -121,11 +118,8 @@ int main(){
 	// Fecha os handles dos objetos de sincronização
 
     CloseHandle(look);
-    CloseHandle(pay);
-    /* CloseHandle(waiting_room); */
     CloseHandle(chair);
     CloseHandle(wake);
-    CloseHandle(work);
     CloseHandle(leave_chair);
     CloseHandle(end);
     CloseHandle(end_pay);
@@ -144,65 +138,52 @@ DWORD WINAPI Client(int i) {
 		// Verifica se há lugar na barbearia
         WaitForSingleObject(look, INFINITE);
 		if (client_counter == N_CHAIRS){
-			/* SetConsoleTextAttribute(hOut, HLRED); */
 		    printf("Cliente %d encontrou a barbearia cheia e foi embora\n", i);
             ReleaseMutex(look);
 			Sleep(2000);
 			continue;
-			/* SetConsoleTextAttribute(hOut, WHITE); */
 		}
+
 		// Cliente entra na barbearia
 		client_counter++;
         printf("Cliente %d entrou na barbearia...\n", i);
         ReleaseMutex(look);
 
-        /* WaitForSingleObject(waiting_room, INFINITE); */
-        /* printf("Cliente %i entra em sala de espera"); */
-        WaitForSingleObject(chair, INFINITE);
-        /* ReleaseSemaphore(waiting_room, 1, NULL); */
+        WaitForSingleObject(chair, INFINITE); // Cliente aguarda lugar em uma das cadeiras
         printf("Cliente %i se senta em uma cadeira de barbeiro\n\n", i);
-        ReleaseSemaphore(wake, 1, NULL);
-        printf("Cliente %i acorda um barbeiro\n\n", i);
-        WaitForSingleObject(end, INFINITE);
-        ReleaseSemaphore(leave_chair, 1, NULL);
-        printf("Cliente %i levanta de cadeira\n\n", i);
-        ReleaseSemaphore(pay, 1, NULL);
-        printf("Cliente %i paga\n", i);
-        WaitForSingleObject(end_pay, INFINITE);
-        printf("Cliente %i sai da barbearia\n\n", i);
 
-        WaitForSingleObject(look, INFINITE);
-        client_counter--;
+        ReleaseSemaphore(wake, 1, NULL); // Cliente acorda um barbeiro
+        printf("Cliente %i acorda um barbeiro\n\n", i);
+
+        WaitForSingleObject(end, INFINITE); // Cliente espera barbeiro terminar seu corte
+        ReleaseSemaphore(leave_chair, 1, NULL); // Cliente sinaliza que levantou da cadeira
+        printf("Cliente %i levanta de cadeira\n\n", i);
+
+        WaitForSingleObject(look, INFINITE); // Cliente entra para fila de pagamento
+        printf("Cliente %i declara que quer pagar\n\n", i);
+        payers++;
         ReleaseMutex(look);
 
-		/* // Cliente aguarda sua vez */
-        /* ReleaseSemaphore(hAguardaCliente, 1, NULL); */
-		/* // Cliente acorda o barbeiro */
-		/* id_cliente = i; */
-        /* WaitForSingleObject(hBarbeiroLivre, INFINITE); */
-		/* // Cliente tem sua barba feita pelo barbeiro */
-		/* TemABarbaFeita(i); */
-        /* WaitForSingleObject(hBarbeiroTerminou, INFINITE); */
-		/* // Cliente sai da barbearia */
+        printf("Cliente %i espera para pagar\n\n", i);
+        WaitForSingleObject(end_pay, INFINITE); // Cliente aguarda pagamento ser recebido
+        printf("Cliente %i pagou\n\n", i);
 
-        /* WaitForSingleObject(hMutex, NULL); */
-		/* n_clientes--; */
-        /* ReleaseMutex(hMutex); */
 
-		/* SetConsoleTextAttribute(hOut, WHITE); */
-		/* printf("Cliente %d saindo da barbearia...\n", i); */
+        WaitForSingleObject(look, INFINITE); // Cliente sai da barbearia
+        client_counter--;
+        printf("Cliente %i sai da barbearia\n\n", i); 
+        ReleaseMutex(look);
 
-		Sleep(100);
+		Sleep(1000);
 
 	} while (nTecla != ESC);
 
-	/* SetConsoleTextAttribute(hOut, WHITE); */
 	printf("Thread cliente %d encerrando execucao...\n", i);
 	_endthreadex(0);
 	return(0);
 }//ThreadCliente
 
-DWORD WINAPI Barber(int i) {
+DWORD WINAPI Barber(int i){
 
 	DWORD dwStatus;
 	BOOL bStatus;
@@ -210,36 +191,51 @@ DWORD WINAPI Barber(int i) {
     bool cashier = (i == 0);
 
     do{
-        /* if(cashier){ */
-        /*     DWORD non_timeout = WaitForSingleObject(pay, INFINITE); */
-        /*     if(non_timeout){ */
-        /*         printf("Barbeiro %i recebe pagamento \n\n", i); */
-        /*         ReleaseSemaphore(end_pay, 1, NULL); */
-        /*     } */
 
-        /* ReleaseSemaphore(chair, 1, NULL); */
-        /* } */
+        if(cashier){ 
+            WaitForSingleObject(look, INFINITE);
+            if(payers != 0){
+                printf("Barbeiro caixa recebendo pagamento de %i clientes\n\n", payers);
+                ReleaseSemaphore(end_pay, payers, NULL);
+                payers = 0;
+            }
+            ReleaseMutex(look);
+        }
 
-        WaitForSingleObject(wake, INFINITE);
-        WaitForSingleObject(work, INFINITE); // investigar necessidade desse semaforo. pode ser desnecessario
-        FazABarbaDoCliente(i);
-        /* printf("Barbeiro %i corta cabelo \n\n", i); */
-        ReleaseSemaphore(work, 1, NULL);
+        WaitForSingleObject(wake, INFINITE); // Barbeiro aguarda cliente o acordar
+
+        FazABarbaDoCliente(i); // Faz a barba do cliente
         TerminaABarbaDoCliente(i);
-        ReleaseSemaphore(end, 1, NULL);
-        WaitForSingleObject(leave_chair, INFINITE);
 
-        /* if(cashier){ */
-            WaitForSingleObject(pay, INFINITE);
-            printf("Barbeiro %i recebe pagamento \n\n", i);
-            ReleaseSemaphore(end_pay, 1, NULL);
+        if(cashier){ 
+            WaitForSingleObject(look, INFINITE);
+            if(payers != 0){
+                printf("Barbeiro caixa recebendo pagamento de %i clientes\n\n", payers);
+                ReleaseSemaphore(end_pay, payers, NULL);
+                payers = 0;
+            }
+            ReleaseMutex(look);
+        }
 
-        ReleaseSemaphore(chair, 1, NULL);
-        /* } */
-    Sleep(100);
+        ReleaseSemaphore(end, 1, NULL); // Sinaliza que terminou
+
+        WaitForSingleObject(leave_chair, INFINITE); // Espera cliente levantar da cadeira
+
+        if(cashier){ 
+            WaitForSingleObject(look, INFINITE);
+            if(payers != 0){
+                printf("Barbeiro caixa recebendo pagamento de %i clientes\n\n", payers);
+                ReleaseSemaphore(end_pay, payers, NULL);
+                payers = 0;
+            }
+            ReleaseMutex(look);
+        }
+
+        ReleaseSemaphore(chair, 1, NULL); // Sinaliza que cadeira esta livre
+        Sleep(1000);
+
     }while(nTecla!=ESC);
 
-	/* SetConsoleTextAttribute(hOut, HLGREEN); */
 	printf("Thread barbeiro encerrando execucao...\n");
 	_endthreadex(0);
 	return(0);
