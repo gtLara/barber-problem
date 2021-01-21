@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <process.h>						// _beginthreadex() e _endthreadex()
 #include <conio.h>							// _getch
+#include <cstdlib>
 
 /* #include "CheckForError.h" */
 
@@ -16,8 +17,8 @@ typedef unsigned *CAST_LPDWORD;
 #define HLRED   FOREGROUND_RED   | FOREGROUND_INTENSITY
 
 #define	ESC				0x1B			// Tecla para encerrar o programa
-#define N_CLIENTS		10			// Número de clientes
-#define N_BARBS		    6			// Número de barbeiros
+#define N_CLIENTS		4			// Número de clientes
+#define N_BARBS		    3			// Número de barbeiros
 #define N_CASHIERS		1			// Número de caixas
 #define N_CHAIRS        7           // Número de cadeiras (4 de espera e 3 de barbear)
 
@@ -33,13 +34,12 @@ int client_counter = 0;
 int id_cliente;                     // Identificador do cliente
 int payers = 0; // numero de clientes a pagar
 
-HANDLE look;  
-HANDLE waiting_room;  
-HANDLE chair;
-HANDLE wake;
-HANDLE leave_chair;
-HANDLE end;
-HANDLE end_pay;
+HANDLE look;  // mutex que controla acesso a variaveis globais
+HANDLE chair; // semaforo que controla acesso a cadeira dos barbeiros
+HANDLE wake; // semaforo que sinaliza para algum barbeiro acordar
+HANDLE leave_chair; // semaforo que sinaliza que um cliente deixou a cadeira de um barbeiro
+HANDLE end; // semaforo que sinaliza que o barbeiro terminou de barbear
+HANDLE end_pay; // semaforo que indica que o babeiro caixa terminou de receber o pagamento
 
 // THREAD PRIMÁRIA
 int main(){
@@ -51,30 +51,25 @@ int main(){
 	int i;
 
 	// Obtém um handle para a saída da console
-	/* hOut = GetStdHandle(STD_OUTPUT_HANDLE); */
-	/* if (hOut == INVALID_HANDLE_VALUE) */
-	/* 	printf("Erro ao obter handle para a saída da console\n"); */
 
 	// Cria objetos de sincronização
 
     look = CreateMutex(NULL, FALSE, NULL);
-    /* waiting_room = CreateSemaphore(NULL, waiting_room_capacity, waiting_room_capacity, NULL); */
-    chair = CreateSemaphore(NULL, N_BARBS, N_BARBS, NULL);
-    wake = CreateSemaphore(NULL, 0, N_BARBS, NULL); // sera que maximo deve ser n_barb mesmo?
+    chair = CreateSemaphore(NULL, N_BARBS, N_BARBS, NULL); // deve ser inicializado com o numero de barbeiros (para cada barb. ha uma cadeira)
+    wake = CreateSemaphore(NULL, 0, N_BARBS, NULL); // deve ser inicializado em zero para que nenhum barbeiro trabalho sem necessidade
     leave_chair = CreateSemaphore(NULL, 0, N_BARBS, NULL);
     end = CreateSemaphore(NULL, 0, N_BARBS, NULL);
     end_pay = CreateSemaphore(NULL, 0, N_BARBS, NULL);
 
 	// Criação de threads
-	// Note que _beginthreadex() retorna -1L em caso de erro
 	for (i=0; i < N_CLIENTS; ++i) {
 		hThreads[i] = (HANDLE) _beginthreadex(
 						       NULL,
 							   0,
-							   (CAST_FUNCTION) Client,	//Casting necessário
+							   (CAST_FUNCTION) Client,	
 							   (LPVOID)(INT_PTR)i,
 							   0,								
-							   (CAST_LPDWORD)&dwIdCliente);		//Casting necessário
+							   (CAST_LPDWORD)&dwIdCliente);		
 		/* SetConsoleTextAttribute(hOut, WHITE); */
 		if (hThreads[i] != (HANDLE) -1L)
 			printf("Thread Cliente %d criada com Id=%0x\n", i, dwIdCliente);
@@ -164,17 +159,16 @@ DWORD WINAPI Client(int i) {
         payers++;
         ReleaseMutex(look);
 
-        printf("Cliente %i espera para pagar\n\n", i);
+        printf("Cliente %i espera para pagar em uma fila de %i clientes\n\n", i, payers);
         WaitForSingleObject(end_pay, INFINITE); // Cliente aguarda pagamento ser recebido
         printf("Cliente %i pagou\n\n", i);
-
 
         WaitForSingleObject(look, INFINITE); // Cliente sai da barbearia
         client_counter--;
         printf("Cliente %i sai da barbearia\n\n", i); 
         ReleaseMutex(look);
 
-		Sleep(1000);
+		Sleep(3000);
 
 	} while (nTecla != ESC);
 
@@ -202,7 +196,25 @@ DWORD WINAPI Barber(int i){
             ReleaseMutex(look);
         }
 
-        WaitForSingleObject(wake, INFINITE); // Barbeiro aguarda cliente o acordar
+        DWORD status = WaitForSingleObject(wake, 2000); // Barbeiro aguarda cliente o acordar
+        
+        if(status == WAIT_TIMEOUT){ // Trata o caso onde a solucao pode apresentar deadlock (babeiro caixa dorme com a fila cheia e nenhum cliente o desperta)
+
+            if(cashier){  // Se for o caixa, ele recebe pagamento da fila e pula a interacao do while
+                WaitForSingleObject(look, INFINITE);
+                printf("Alarme do barbeiro caixa desperta! Ufa, quase tivemos um deadlock.\n\n");
+                if(payers != 0){
+                    printf("Barbeiro caixa recebendo pagamento de %i clientes\n\n", payers);
+                    ReleaseSemaphore(end_pay, payers, NULL);
+                    payers = 0;
+                }
+                ReleaseMutex(look);
+                continue;
+
+            }else{ 
+                WaitForSingleObject(wake, INFINITE); // No caso (muito improvavel) de um barbeiro cujo alarme desperta nao for o caixa, ele vola a tirar seu cochilo
+            }
+        }
 
         FazABarbaDoCliente(i); // Faz a barba do cliente
         TerminaABarbaDoCliente(i);
@@ -232,7 +244,7 @@ DWORD WINAPI Barber(int i){
         }
 
         ReleaseSemaphore(chair, 1, NULL); // Sinaliza que cadeira esta livre
-        Sleep(1000);
+        Sleep(3000);
 
     }while(nTecla!=ESC);
 
@@ -243,24 +255,15 @@ DWORD WINAPI Barber(int i){
 
 void FazABarbaDoCliente(int id) {
 
-	/* SetConsoleTextAttribute(hOut, HLGREEN); */
-	printf("Barbeiro %i fazendo barba\n", id);
-	Sleep(10);
+    int time = ((rand() % 10) + 1) * 2000; //cada barba demora de 2 a 20 segundos
+	printf("Barbeiro %i fazendo barba em %i segundos\n", id, (time/1000));
+	Sleep(time);
 	return;
 }
 
 void TerminaABarbaDoCliente(int b_id) {
 
-	/* SetConsoleTextAttribute(hOut, HLGREEN); */
 	printf("Barbeiro %i terminou barba...\n\n", b_id);
-	Sleep(10);
+	Sleep(1000);
 	return;
 }
-
-/* void TemABarbaFeita(int c_id, int b_id) { */
-
-/* 	SetConsoleTextAttribute(hOut, HLGREEN); */
-/* 	printf("Cliente %d tem sua barba feita pelo barbeiro %i...\n\n", c_id, b_id); */
-/* 	Sleep(10); */
-/* 	return; */
-/* } */
